@@ -1,0 +1,69 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql" // Chúng ta sẽ dùng PostgreSQL (rất hợp với Vercel)
+  url      = env("DATABASE_URL")
+}
+
+// 1. Bảng Nhân viên/Quản trị viên
+model User {
+  id        String    @id @default(cuid())
+  name      String
+  email     String    @unique
+  password  String    // Tạm thời dùng mật khẩu cơ bản
+  role      Role      @default(STAFF)
+  pages     Fanpage[] // Các Fanpage mà nhân viên này được quyền quản lý
+  createdAt DateTime  @default(now())
+}
+
+enum Role {
+  ADMIN
+  STAFF
+}
+
+// 2. Bảng Fanpage (Lưu thông tin kết nối Facebook)
+model Fanpage {
+  id            String         @id @default(cuid())
+  pageId        String         @unique // ID thực tế của Page trên Facebook
+  name          String
+  accessToken   String         // Chìa khóa (Token) để hệ thống thay mặt page gửi tin nhắn
+  addedBy       User           @relation(fields: [userId], references: [id])
+  userId        String
+  conversations Conversation[]
+  createdAt     DateTime       @default(now())
+}
+
+// 3. Bảng Cuộc hội thoại (Mỗi khách hàng nhắn tin sẽ tạo 1 hội thoại)
+model Conversation {
+  id           String    @id @default(cuid())
+  fanpage      Fanpage   @relation(fields: [fanpageId], references: [id])
+  fanpageId    String
+  customerId   String    // ID của khách hàng (PSID) do Facebook cấp
+  customerName String?   // Tên Facebook của khách
+  messages     Message[]
+  tags         Tag[]     // Liên kết với các thẻ (Tags)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+// 4. Bảng Tin nhắn (Lưu chi tiết từng dòng chat)
+model Message {
+  id             String       @id @default(cuid())
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  conversationId String
+  messageId      String       @unique // ID của tin nhắn từ Facebook
+  content        String?
+  senderId       String       // ID người gửi (Khách hoặc Page)
+  isFromCustomer Boolean      @default(true) // Xác định tin này là khách gửi hay Page gửi
+  createdAt      DateTime     @default(now())
+}
+
+// 5. Bảng Thẻ (Dùng để phân loại: Khách mới, Đã chốt, v.v.)
+model Tag {
+  id            String         @id @default(cuid())
+  name          String         @unique
+  color         String?        // Mã màu để hiển thị UI cho đẹp (VD: #FF0000)
+  conversations Conversation[] // Các cuộc hội thoại đang được gắn thẻ này
+}
