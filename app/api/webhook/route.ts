@@ -22,7 +22,7 @@ export async function POST(request: Request) {
 
     if (body.object === 'page') {
       for (const entry of body.entry) {
-        const pageId = entry.id; // ID của Fanpage trên Facebook
+        const pageId = entry.id;
 
         for (const event of entry.messaging) {
           if (event.message && event.message.text) {
@@ -30,15 +30,12 @@ export async function POST(request: Request) {
             const messageId = event.message.mid;
             const text = event.message.text;
 
-            // 1. Kiểm tra Fanpage đã tồn tại trong hệ thống chưa
-            console.log("Tìm fanpage với ID:", pageId);
             const fanpage = await prisma.fanpage.findUnique({
               where: { pageId: pageId }
             });
 
-            if (!fanpage) continue; // Bỏ qua nếu chưa khai báo Page trong DB
+            if (!fanpage) continue;
 
-            // 2. Tìm hoặc tạo mới Cuộc hội thoại
             let conversation = await prisma.conversation.findFirst({
               where: {
                 fanpageId: fanpage.id,
@@ -46,20 +43,33 @@ export async function POST(request: Request) {
               }
             });
 
+            // NẾU LÀ KHÁCH HÀNG MỚI -> LẤY TÊN TỪ FACEBOOK
             if (!conversation) {
+              let realName = "Khách hàng mới";
+              try {
+                // Gọi Graph API của Facebook để hỏi tên
+                const fbRes = await fetch(`https://graph.facebook.com/${customerId}?fields=name&access_token=${fanpage.accessToken}`);
+                const fbData = await fbRes.json();
+                if (fbData.name) {
+                  realName = fbData.name; // Gán tên thật
+                }
+              } catch (e) {
+                console.error("Lỗi lấy tên Facebook:", e);
+              }
+
               conversation = await prisma.conversation.create({
                 data: {
                   fanpageId: fanpage.id,
                   customerId: customerId,
-                  customerName: "Khách hàng mới" 
+                  customerName: realName // Lưu tên thật vào Database
                 }
               });
             }
 
-            // 3. Lưu nội dung tin nhắn
+            // Lưu tin nhắn
             await prisma.message.upsert({
               where: { messageId: messageId },
-              update: {}, // Chống trùng lặp tin nhắn
+              update: {},
               create: {
                 conversationId: conversation.id,
                 messageId: messageId,
