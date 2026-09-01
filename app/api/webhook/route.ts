@@ -1,17 +1,13 @@
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '@/lib/prisma';
+import { pusherServer } from '@/lib/pusher'; // Khai báo tĩnh Pusher ở đây
 
-const prisma = new PrismaClient();
 const VERIFY_TOKEN = process.env.FACEBOOK_VERIFY_TOKEN;
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const mode = searchParams.get("hub.mode");
-  const token = searchParams.get("hub.verify_token");
-  const challenge = searchParams.get("hub.challenge");
-
-  if (mode === "subscribe" && token === VERIFY_TOKEN) {
-    return new NextResponse(challenge, { status: 200 });
+  if (searchParams.get("hub.mode") === "subscribe" && searchParams.get("hub.verify_token") === VERIFY_TOKEN) {
+    return new NextResponse(searchParams.get("hub.challenge"), { status: 200 });
   }
   return new NextResponse("Forbidden", { status: 403 });
 }
@@ -22,62 +18,72 @@ export async function POST(request: Request) {
 
     if (body.object === 'page') {
       for (const entry of body.entry) {
-        const pageId = entry.id;
-
         for (const event of entry.messaging) {
           if (event.message && event.message.text) {
             const customerId = event.sender.id;
             const messageId = event.message.mid;
-            const text = event.message.text;
-
-            const fanpage = await prisma.fanpage.findUnique({
-              where: { pageId: pageId }
-            });
-
+            
+            const fanpage = await prisma.fanpage.findUnique({ where: { pageId: entry.id } });
             if (!fanpage) continue;
 
             let conversation = await prisma.conversation.findFirst({
-              where: {
-                fanpageId: fanpage.id,
-                customerId: customerId
-              }
+              where: { fanpageId: fanpage.id, customerId: customerId }
             });
 
-            // NẾU LÀ KHÁCH HÀNG MỚI -> LẤY TÊN TỪ FACEBOOK
             if (!conversation) {
               let realName = "Khách hàng mới";
+              let avatarUrl = `https://ui-avatars.com/api/?name=Khach+Hang&background=random`;
+              
+              // Lấy thông tin avatar thật từ Facebook
               try {
-                // Gọi Graph API của Facebook để hỏi tên
-                const fbRes = await fetch(`https://graph.facebook.com/${customerId}?fields=name&access_token=${fanpage.accessToken}`);
+                const fbRes = await fetch(`https://graph.facebook.com/${customerId}?fields=name,profile_pic&access_token=${fanpage.accessToken}`);
                 const fbData = await fbRes.json();
-                if (fbData.name) {
-                  realName = fbData.name; // Gán tên thật
-                }
-              } catch (e) {
-                console.error("Lỗi lấy tên Facebook:", e);
+                if (fbData.name) realName = fbData.name;
+                if (fbData.profile_pic) avatarUrl = fbData.profile_pic;
+              } catch (e) { 
+                console.error("Lỗi lấy thông tin FB:", e); 
               }
 
               conversation = await prisma.conversation.create({
                 data: {
                   fanpageId: fanpage.id,
                   customerId: customerId,
-                  customerName: realName // Lưu tên thật vào Database
+                  customerName: realName,
+                  avatarUrl: avatarUrl,
+                  isRead: false // Đánh dấu chưa đọc
                 }
+              });
+            } else {
+              // Khách cũ nhắn lại: Cập nhật isRead = false
+              conversation = await prisma.conversation.update({
+                where: { id: conversation.id },
+                data: { isRead: false, updatedAt: new Date() }
               });
             }
 
             // Lưu tin nhắn
-            await prisma.message.upsert({
+            const savedMessage = await prisma.message.upsert({
               where: { messageId: messageId },
               update: {},
               create: {
                 conversationId: conversation.id,
                 messageId: messageId,
-                content: text,
+                content: event.message.text,
                 senderId: customerId,
                 isFromCustomer: true
               }
             });
+
+            // Bắn tín hiệu Real-time
+            try {
+              await pusherServer.trigger('helpdesk-chat', 'new-message', {
+                conversationId: conversation.id,
+                message: savedMessage
+              });
+              console.log("Đã bắn Pusher từ Webhook thành công!"); 
+            } catch (err) {
+              console.error("Lỗi bắn Pusher từ Webhook:", err);
+            }
           }
         }
       }

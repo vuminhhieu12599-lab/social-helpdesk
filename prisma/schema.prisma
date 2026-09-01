@@ -3,19 +3,25 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql" // Chúng ta sẽ dùng PostgreSQL (rất hợp với Vercel)
+  provider = "postgresql" 
   url      = env("DATABASE_URL")
 }
 
 // 1. Bảng Nhân viên/Quản trị viên
 model User {
-  id        String    @id @default(cuid())
-  name      String
-  email     String    @unique
-  password  String    // Tạm thời dùng mật khẩu cơ bản
-  role      Role      @default(STAFF)
-  pages     Fanpage[] // Các Fanpage mà nhân viên này được quyền quản lý
-  createdAt DateTime  @default(now())
+  id           String    @id @default(cuid())
+  name         String
+  email        String    @unique
+  password     String    
+  role         Role      @default(STAFF)
+  
+  // Các Page do Admin này thêm vào hệ thống
+  addedPages   Fanpage[] @relation("PageOwner") 
+  
+  // Các Page mà tài khoản này ĐƯỢC CẤP QUYỀN trực chat
+  managedPages Fanpage[] @relation("PageManagers") 
+  
+  createdAt    DateTime  @default(now())
 }
 
 enum Role {
@@ -26,44 +32,55 @@ enum Role {
 // 2. Bảng Fanpage (Lưu thông tin kết nối Facebook)
 model Fanpage {
   id            String         @id @default(cuid())
-  pageId        String         @unique // ID thực tế của Page trên Facebook
+  pageId        String         @unique 
   name          String
-  accessToken   String         // Chìa khóa (Token) để hệ thống thay mặt page gửi tin nhắn
-  addedBy       User           @relation(fields: [userId], references: [id])
+  accessToken   String         
+  
+  // Liên kết với Admin đã thêm Page này
+  addedBy       User           @relation("PageOwner", fields: [userId], references: [id])
   userId        String
+  
+  // Danh sách nhân viên được quyền trực Page này
+  managers      User[]         @relation("PageManagers") 
+  
   conversations Conversation[]
   createdAt     DateTime       @default(now())
 }
 
-// 3. Bảng Cuộc hội thoại (Mỗi khách hàng nhắn tin sẽ tạo 1 hội thoại)
+// 3. Bảng Cuộc hội thoại
 model Conversation {
   id           String    @id @default(cuid())
   fanpage      Fanpage   @relation(fields: [fanpageId], references: [id])
   fanpageId    String
-  customerId   String    // ID của khách hàng (PSID) do Facebook cấp
-  customerName String?   // Tên Facebook của khách
+  customerId   String    
+  customerName String?   
+  avatarUrl    String?   // URL ảnh đại diện lấy từ Facebook
+  isRead       Boolean   @default(true) // Trạng thái đọc tin nhắn
   messages     Message[]
-  tags         Tag[]     // Liên kết với các thẻ (Tags)
+  tags         Tag[]     
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
+
+  // Tối ưu hóa truy vấn cho việc load danh sách hội thoại
+  @@index([fanpageId, updatedAt(sort: Desc)]) 
 }
 
-// 4. Bảng Tin nhắn (Lưu chi tiết từng dòng chat)
+// 4. Bảng Tin nhắn
 model Message {
   id             String       @id @default(cuid())
   conversation   Conversation @relation(fields: [conversationId], references: [id])
   conversationId String
-  messageId      String       @unique // ID của tin nhắn từ Facebook
+  messageId      String       @unique 
   content        String?
-  senderId       String       // ID người gửi (Khách hoặc Page)
-  isFromCustomer Boolean      @default(true) // Xác định tin này là khách gửi hay Page gửi
+  senderId       String       
+  isFromCustomer Boolean      @default(true) 
   createdAt      DateTime     @default(now())
 }
 
-// 5. Bảng Thẻ (Dùng để phân loại: Khách mới, Đã chốt, v.v.)
+// 5. Bảng Thẻ phân loại
 model Tag {
   id            String         @id @default(cuid())
   name          String         @unique
-  color         String?        // Mã màu để hiển thị UI cho đẹp (VD: #FF0000)
-  conversations Conversation[] // Các cuộc hội thoại đang được gắn thẻ này
+  color         String?        
+  conversations Conversation[] 
 }
